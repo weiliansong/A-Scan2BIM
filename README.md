@@ -11,9 +11,9 @@ Please also visit our [project website](https://a-scan2bim.github.io/) for a vid
 - [ ] [Training and evaluation](#training-and-evaluation)
 - [ ] [Collecting your own data](#collecting-your-own-data)
 - [ ] [Building and developing the plugin](#building-and-developing-the-plugin)
-- [ ] [Contact](#contact)
-- [ ] [Bibtex](#bibtex)
-- [ ] [Acknowledgment](#acknowledgment)
+- [x] [Contact](#contact)
+- [x] [Bibtex](#bibtex)
+- [x] [Acknowledgment](#acknowledgment)
 
 # Prerequisites
 
@@ -158,4 +158,4 @@ This research is partially supported by NSERC Discovery Grants with Accelerator 
 We are also grateful to the [CV4AEC CVPR workshop](https://cv4aec.github.io/) for providing the point clouds.
 
 And finally, much of the plugin code was borrowed from Jeremy Tammik's sample add-in [WinTooltip](https://github.com/jeremytammik/WinTooltip).
-Hats off to Jeremy for all the wonderful tutorials he has written over the years :tophat:.
+Hats off :tophat: to Jeremy for all the wonderful tutorials he has written over the years.
