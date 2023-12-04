@@ -8,7 +8,7 @@ Please also visit our [project website](https://a-scan2bim.github.io/) for a vid
 
 - [x] [Prerequisites](#prerequisites)
 - [x] [Quickstart](#quickstart)
-- [ ] [Training and evaluation](#training-and-evaluation)
+- [x] [Training and evaluation](#training-and-evaluation)
 - [ ] [Collecting your own data](#collecting-your-own-data)
 - [ ] [Building and developing the plugin](#building-and-developing-the-plugin)
 - [x] [Contact](#contact)
@@ -128,7 +128,98 @@ To do so:
 
 # Training and evaluation
 
-Coming soon...
+At a high-level, our system consists of two components:
+candidate wall enumeration network,
+and next wall prediction network.
+They are trained stand-alone, which we will describe the process step-by-step.
+
+## Data/environment preparation
+
+First, fill out the data request form [here](https://forms.gle/Apg86MauTep2KTxx8).
+We will be in contact with you to provide the data download links.
+
+To install all python dependencies, run the provided script: `sh ./setup_env.sh`.
+
+Once you have the data, unzip it in the root directory of the repository and run the following command to preprocess the data:
+```
+cd code/preprocess
+python data_gen.py
+```
+
+Also please download pretrained models from [here](https://www.dropbox.com/scl/fi/kdz2uvar3di2jgzb64ca0/ckpts_full.zip?rlkey=npe06fic06uaxblygo27d5o6h&dl=0) and extract to the root directory of the repository.
+Some weights are necessary for network initialization (`pretrained/`) or evaluation (`ae/`), but others you may delete if training from scratch.
+
+## Training candidate wall enumerator
+
+We borrow the HEAT architecture, which consists of two components: corner detector, and edge classifier.
+However in our case, we do not train end-to-end due to the large input size.
+
+```
+cd code/learn
+
+# Step 1: train corner detector
+for i in {0..15}
+do
+  python train_corner.py --test_idx i
+done
+
+# Step 2: cache detected corners to disk
+python backend.py export_corners
+
+# Step 3: train edge classifier
+for i in {0..15}
+do
+  python train_edge.py --test_idx i
+done
+
+# Step 4: cache detected edges to disk
+python backend.py save_edge_preds
+```
+
+Note that we do leave-one-out (per-floor) cross-validation, hence the for loops for step 1 and 3.
+
+## Training next wall predictor
+
+Our next wall predictor along with the classifier baseline method are both trained on GT walls and order.
+
+Training is initialized from pretrained weights of the previous candidate wall enumeration task (variant where only one reference point is used).
+
+We have provided the pretrained weights for your convenience (see above for link to pretrained checkpoints), but they may not be necessary if training for your own task.
+
+```
+cd code/learn
+
+# Training our method (metric-learning based)
+for i in {0..15}
+do
+  python train_order_metric.py --test_idx i
+done
+
+# Training classifier baseline
+for i in {0..15}
+do
+  python train_order_class.py --test_idx i
+done
+```
+
+## Evaluation
+
+To evaluate reconstruction metrics:
+```
+python backend.py compute-metrics
+```
+
+To evaluate order metrics:
+```
+python eval_order.py eval-all-floors
+python eval_order.py plot-seq-FID
+```
+
+To evaluate entropy and accuracy of next wall prediction:
+```
+python eval_order.py eval-entropy
+python eval_order.py eval-all-acc-wrt-history
+```
 
 # Collecting your own data
 
@@ -137,6 +228,7 @@ Coming soon...
 # Building and developing the plugin
 
 Coming soon...
+
 # Contact
 
 Weilian Song, weilians@sfu.ca

@@ -1,8 +1,11 @@
 ./data/
 ./ckpts/
 data
+data_small/
 ckpts
 *_full
 __pycache__/
 .vscode/
 *.swp
+*.zip
+fid_csv/

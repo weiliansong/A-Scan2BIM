@@ -7,8 +7,7 @@ import torch
 from rtree import index
 from scipy.spatial import distance
 from shapely import affinity
-from shapely.geometry import (LineString, MultiLineString, MultiPoint, Point,
-                              box)
+from shapely.geometry import LineString, MultiLineString, MultiPoint, Point, box
 from shapely.ops import nearest_points, split
 from skimage.transform import SimilarityTransform, resize
 from torch.utils.data.dataloader import default_collate
@@ -408,7 +407,9 @@ def remove_short_edges(all_edges):
     return all_edges
 
 
-def find_candidates_fast(curr_seq, heat_edges, heat_widths, threshold=10):
+def find_candidates_fast(
+    curr_seq, heat_edges, heat_widths, return_mask=False, threshold=10
+):
     # cache shapely lines and build a database for faster lookup
     db = index.Index()
     curr_shps = []
@@ -421,6 +422,7 @@ def find_candidates_fast(curr_seq, heat_edges, heat_widths, threshold=10):
     # now find candidates
     cand_edges = []
     cand_widths = []
+    keep_mask = np.zeros(len(heat_edges), dtype=bool)
 
     for heat_i, heat_coord in enumerate(heat_edges):
         (ax, ay, bx, by) = heat_coord
@@ -459,8 +461,12 @@ def find_candidates_fast(curr_seq, heat_edges, heat_widths, threshold=10):
         if keep:
             cand_edges.append(heat_coord)
             cand_widths.append(heat_widths[heat_i])
+            keep_mask[heat_i] = True
 
-    return np.array(cand_edges), np.array(cand_widths)
+    if return_mask:
+        return keep_mask
+    else:
+        return np.array(cand_edges), np.array(cand_widths)
 
 
 def find_candidates(curr_seq, heat_edges, threshold=5):
@@ -920,6 +926,21 @@ def nearest_dist(ab, cd):
     cd_shp = LineString([(cx, cy), (dx, dy)])
 
     return LineString(nearest_points(ab_shp, cd_shp)).length
+
+
+def perpen_dist(ab, cd):
+    ax, ay, bx, by = ab
+    cx, cy, dx, dy = cd
+
+    ab_shp = LineString([(ax, ay), (bx, by)])
+    cd_shp = LineString([(cx, cy), (dx, dy)])
+    c_shp = Point(cx, cy)
+    d_shp = Point(dx, dy)
+
+    ab_c = LineString(nearest_points(ab_shp, c_shp)).length
+    ab_d = LineString(nearest_points(ab_shp, d_shp)).length
+
+    return max(ab_c, ab_d)
 
 
 # every GT edge can only be matched with the closest pred edge

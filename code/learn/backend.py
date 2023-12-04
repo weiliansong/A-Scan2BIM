@@ -184,7 +184,7 @@ class Backend:
         floor_f = os.path.join(self.data_path, "all_floors.txt")
         with open(floor_f, "r") as f:
             floor_names = [x.strip() for x in f.readlines()]
-        self.floor_name = floor_names[floor_idx]
+        self.floor_name = floor_names[floor_idx].split(",")[0]
 
         with open("%s/bounds/%s.csv" % (self.data_path, self.floor_name), "r") as f:
             self.bounds = [float(x) for x in f.readline().strip().split(",")]
@@ -1931,14 +1931,13 @@ class Backend:
         my_utils.vis_edges(density_img, color_coords)
 
 
-def compute_metrics():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--deform_type", type=str, default="DETR_dense")
-    parser.add_argument("--num_samples", type=int, default=16)
-    parser.add_argument("--branch", type=str, default="hybrid")
-    parser.add_argument("--postprocess", action="store_true", default=True)
-    args = parser.parse_args()
-
+@app.command()
+def compute_metrics(
+    deform_type: str = "DETR_dense",
+    num_samples: int = 16,
+    branch: str = "hybrid",
+    postprocess: bool = True,
+):
     all_precision = []
     all_recall = []
     all_f_scores = []
@@ -1946,7 +1945,7 @@ def compute_metrics():
     all_accs_width = []
 
     for floor_idx in range(16):
-        backend = Backend(deform_type=args.deform_type, num_samples=args.num_samples)
+        backend = Backend(deform_type=deform_type, num_samples=num_samples)
         backend.init_edge_models(floor_idx)
         backend.init_floor(floor_idx)
 
@@ -1958,8 +1957,8 @@ def compute_metrics():
 
         pred_coords, _, pred_widths = backend.get_pred_coords(
             corners,
-            branch=args.branch,
-            postprocess=args.postprocess,
+            branch=branch,
+            postprocess=postprocess,
         )
 
         # compute P/R
@@ -2090,23 +2089,38 @@ def compute_metrics():
 
     with open("pr_paper_updated.csv", "a") as f:
         f.write(
-            "%s,%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n"
+            "%s,%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n"
             % (
-                args.deform_type,
-                args.num_samples,
+                deform_type,
+                num_samples,
                 all_precision[:, 0].mean(),
                 all_recall[:, 0].mean(),
                 all_f_scores[:, 0].mean(),
-                all_accs_width[:, 0].mean(),
                 all_precision[:, 1].mean(),
                 all_recall[:, 1].mean(),
                 all_f_scores[:, 1].mean(),
-                all_accs_width[:, 1].mean(),
                 all_precision[:, 2].mean(),
                 all_recall[:, 2].mean(),
                 all_f_scores[:, 2].mean(),
-                all_accs_width[:, 2].mean(),
                 all_iou.mean(),
+            )
+        )
+
+    with open("wall_width_acc.csv", "a") as f:
+        f.write(
+            "%s,%s,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n"
+            % (
+                deform_type,
+                num_samples,
+                all_accs_width[:, 0, 0].mean(),
+                all_accs_width[:, 0, 1].mean(),
+                all_accs_width[:, 0, 2].mean(),
+                all_accs_width[:, 1, 0].mean(),
+                all_accs_width[:, 1, 1].mean(),
+                all_accs_width[:, 1, 2].mean(),
+                all_accs_width[:, 2, 0].mean(),
+                all_accs_width[:, 2, 1].mean(),
+                all_accs_width[:, 2, 2].mean(),
             )
         )
 
@@ -2147,6 +2161,7 @@ def compute_metrics_corner():
     print("P: %.3f  R: %.3f" % (avg_precision, avg_recall))
 
 
+@app.command()
 def export_corners():
     all_precisions = []
     all_recalls = []
@@ -2188,6 +2203,7 @@ def export_corners():
     print("P: %.3f  R: %.3f" % (avg_precision, avg_recall))
 
 
+@app.command()
 def save_edge_preds():
     for floor_idx in range(16):
         backend = Backend(deform_type="DETR_dense", num_samples=16)
@@ -2198,25 +2214,24 @@ def save_edge_preds():
         backend.cache_image_feats(corners)
 
         pred_coords, _, _ = backend.get_pred_coords(
-            corners, branch="hybrid", postprocess=True
+            corners, branch="hybrid", postprocess=False
         )
 
-        print(backend.floor_name)
-        my_utils.vis_edges(
-            backend.density_full,
-            [["-oc", pred_coords]],
-            title=backend.floor_name,
-            save_f="./vis_pred_full/%s.png" % backend.floor_name,
-        )
-
-        continue
+        # print(backend.floor_name)
+        # my_utils.vis_edges(
+        #     backend.density_full,
+        #     [["-oc", pred_coords]],
+        #     title=backend.floor_name,
+        #     save_f="./vis_pred_full/%s.png" % backend.floor_name,
+        # )
 
         # need to remove padding before saving
         [pad_w_before, pad_h_before, pad_w_after, pad_h_after] = backend.square_pad
         pred_coords -= [pad_w_before, pad_h_before, pad_w_before, pad_h_before]
 
+        os.makedirs("../../data/pred_edges", exist_ok=True)
         np.save(
-            "./data/bim_dataset_big_v5/pred_full_paper/%s.npy" % backend.floor_name,
+            "../../data/pred_edges/%s.npy" % backend.floor_name,
             pred_coords,
         )
 

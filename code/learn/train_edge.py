@@ -1,26 +1,23 @@
-import argparse
-import datetime
-import os
-import time
-from pathlib import Path
-
 import torch
 import torch.nn as nn
+import os
+import time
+import datetime
+import argparse
+from pathlib import Path
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-
-import my_utils
-import utils.misc as utils
 from datasets.building_corners_full import (
     BuildingCornerDataset,
     collate_fn_seq,
     get_pixel_features,
 )
 from models.corner_models import CornerEnum
-from models.corner_to_edge import prepare_edge_data
 from models.edge_full_models import EdgeEnum
-from models.loss import CornerCriterion, EdgeCriterion
 from models.unet import ResNetBackbone
+from models.loss import CornerCriterion, EdgeCriterion
+from models.corner_to_edge import prepare_edge_data
+import utils.misc as utils
 
 
 def get_args_parser():
@@ -153,7 +150,7 @@ def get_args_parser():
 
     parser.add_argument(
         "--output_dir",
-        default="./ckpts_edge/debug",
+        default="../../ckpts/edge_sample_16",
         help="path where to save, empty for no saving",
     )
     parser.add_argument(
@@ -173,11 +170,10 @@ def get_args_parser():
     # my own
     parser.add_argument("--test_idx", type=int, default=0)
     parser.add_argument("--grad_accum", type=int, default=16)
-    parser.add_argument("--threshold", type=int, default=8)
+    parser.add_argument("--threshold", type=int, default=30)
     parser.add_argument("--deform_type", default="DETR_dense")
     parser.add_argument("--num_samples", type=int, default=16)
     parser.add_argument("--pool_type", default="max")
-    parser.add_argument("--revectorize", action="store_true")
 
     return parser
 
@@ -230,13 +226,7 @@ def train_one_epoch(
         )
 
         # compute loss
-        loss = (
-            s1_losses
-            + s2_losses_e_hb
-            + s2_losses_e_rel
-            + s2_losses_w_hb
-            + s2_losses_w_rel
-        )
+        loss = s1_losses + s2_losses_e_hb + s2_losses_e_rel + s2_losses_w_hb
         loss /= args.grad_accum
         loss.backward()
 
@@ -304,7 +294,6 @@ def run_model(
         s2_ids,
         s2_edge_mask,
         s2_gt_values,
-        ref_dict,
     ) = edge_model(
         image_feats,
         feat_mask,
@@ -314,8 +303,6 @@ def run_model(
         corner_nums,
         max_candidates,
     )
-
-    # my_utils.vis_ref(image, edge_coords, ref_dict, s2_ids)
 
     (
         s1_losses,
@@ -441,7 +428,7 @@ def evaluate(
 
 
 def main(args):
-    DATAPATH = "./data/bim_dataset_big_v5"
+    DATAPATH = "../../data"
     train_dataset = BuildingCornerDataset(
         DATAPATH,
         phase="train",
@@ -450,8 +437,6 @@ def main(args):
         multiplier=100,
         batch_size=args.batch_size,
         threshold=args.threshold,
-        task="edge_class",
-        revectorize=args.revectorize,
     )
     test_dataset = BuildingCornerDataset(
         DATAPATH,
@@ -461,8 +446,6 @@ def main(args):
         multiplier=1,
         batch_size=args.batch_size,
         threshold=args.threshold,
-        task="edge_class",
-        revectorize=args.revectorize,
     )
 
     train_dataloader = DataLoader(
@@ -530,20 +513,13 @@ def main(args):
 
     else:
         # NOTE initialize our pretrained corner model and also from Jiacheng's checkpoint
-        # corner_ckpt = torch.load('checkpoints_bim_corners/checkpoint_best.pth')
-        ckpt = torch.load("heat_checkpoints/%d/checkpoint_best.pth" % args.test_idx)
+        ckpt = torch.load("../../ckpts/corner/%d/checkpoint.pth" % args.test_idx)
 
         backbone_ckpt = {}
-        for (key, value) in ckpt["backbone"].items():
+        for key, value in ckpt["backbone"].items():
             key = key.replace("module.", "")
             backbone_ckpt[key] = value
         backbone.load_state_dict(backbone_ckpt)
-
-        # edge_model_ckpt = {}
-        # for (key, value) in ckpt["edge_model"].items():
-        #     key = key.replace("module.", "")
-        #     edge_model_ckpt[key] = value
-        # edge_model.load_state_dict(edge_model_ckpt)
 
         print("Resume from pre-trained checkpoints")
 

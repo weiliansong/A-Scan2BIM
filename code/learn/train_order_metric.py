@@ -42,7 +42,7 @@ def get_args_parser():
     parser.add_argument("--resume", action="store_true")
     parser.add_argument(
         "--output_dir",
-        default="./ckpts_metric/debug",
+        default="../../ckpts/order_metric",
         help="path where to save, empty for no saving",
     )
 
@@ -197,8 +197,8 @@ def run_model(data, edge_model, epoch, loss_fn, miner, dist_fn):
 
 
 def main(args):
-    DATAPATH = "./data/bim_dataset_big_v5/"
-    REVIT_ROOT = "../../../revit_projects/"
+    DATAPATH = "../../data"
+    REVIT_ROOT = ""
     image_size = 512
 
     # prepare datasets
@@ -274,7 +274,9 @@ def main(args):
         start_epoch = ckpt["epoch"] + 1
 
     else:
-        ckpt = torch.load("heat_checkpoints/%d/checkpoint_best.pth" % args.test_idx)
+        ckpt = torch.load(
+            "../../ckpts/pretrained/%d/checkpoint_best.pth" % args.test_idx
+        )
 
         replacements = [
             ["decoder_1", "module.transformer.relational_decoder"],
@@ -284,7 +286,7 @@ def main(args):
         edge_model_dict = edge_model.state_dict()
         for key in edge_model_dict.keys():
             replaced = False
-            for (old, new) in replacements:
+            for old, new in replacements:
                 if old in key:
                     assert not replaced
                     new_key = key.replace(old, new)

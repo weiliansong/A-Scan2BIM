@@ -115,20 +115,15 @@ class BuildingCornerDataset(Dataset):
         self.annots = {}
         self._data_names = []
 
-        for (floor_name, _) in floors:
+        for floor_name, _ in floors:
             print(floor_name)
-
-            # load full density image
-            tokens = floor_name.split("_")
-            first = "_".join(tokens[:-1])
-            second = tokens[-1]
 
             # load full density image
             density_slices = []
             for slice_i in range(7):
-                slice_f = "../../../revit_projects/%s/%s/density_%02d.npy" % (
-                    first,
-                    second,
+                slice_f = "%s/density/%s/density_%02d.npy" % (
+                    data_path,
+                    floor_name,
                     slice_i,
                 )
                 density_slice = np.load(slice_f)
@@ -157,13 +152,12 @@ class BuildingCornerDataset(Dataset):
             self.density_fulls[floor_name] = density_full
 
             # load GT annotation
-            annot_f = os.path.join(
-                data_path, "annot/%s_one_shot_full.json" % floor_name
-            )
+            annot_f = os.path.join(data_path, "annot/%s.json" % floor_name)
             with open(annot_f, "r") as f:
                 annot = json.load(f)
 
-            gt_coords = np.array(list(annot.values()))
+            annot = np.array(list(annot.values()))
+            gt_coords, gt_widths = annot[:, :4], annot[:, 4]
             gt_coords += [pad_w_before, pad_h_before, pad_w_before, pad_h_before]
             # gt_coords = my_utils.revectorize(gt_coords)
 
@@ -202,7 +196,7 @@ class BuildingCornerDataset(Dataset):
                 (minx, miny, maxx, maxy) = bbox
 
                 crop_corners = []
-                for (x, y) in gt_corners:
+                for x, y in gt_corners:
                     if (minx < x < maxx) and (miny < y < maxy):
                         crop_corners.append([x, y])
 
@@ -355,7 +349,7 @@ class BuildingCornerDataset(Dataset):
         labels = np.zeros(image_shape)
         if len(corners):
             corners = corners.round()
-            xint, yint = corners[:, 0].astype(np.int), corners[:, 1].astype(np.int)
+            xint, yint = corners[:, 0].astype(int), corners[:, 1].astype(int)
             labels[yint, xint] = 1
 
         # pad the labels so that the edge doesn't get too high
@@ -403,7 +397,7 @@ class BuildingCornerDataset(Dataset):
         # turn annotations into a list of edges
         edges = []
 
-        for (a, bs) in annot.items():
+        for a, bs in annot.items():
             for b in bs:
                 edges.append(a + b)  # (x, y) + (x, y) = (x, y, x, y)
 
@@ -471,7 +465,7 @@ class BuildingCornerDataset(Dataset):
 
         # turn back into annot object
         new_annot = {}
-        for (x0, y0, x1, y1) in keep_edges:
+        for x0, y0, x1, y1 in keep_edges:
             a = (x0, y0)
             b = (x1, y1)
 
@@ -495,7 +489,7 @@ class BuildingCornerDataset(Dataset):
             yy = [miny, miny, maxy, maxy, miny]
             ax1.plot(xx, yy, "-")
 
-            for (a, bs) in annot.items():
+            for a, bs in annot.items():
                 for b in bs:
                     x0, y0 = a
                     x1, y1 = b
@@ -505,7 +499,7 @@ class BuildingCornerDataset(Dataset):
 
             ax2.imshow(img_crop)
 
-            for (a, bs) in new_annot.items():
+            for a, bs in new_annot.items():
                 for b in bs:
                     x0, y0 = a
                     x1, y1 = b
@@ -538,7 +532,7 @@ class BuildingCornerDataset(Dataset):
 
         plt.imshow(img.permute([1, 2, 0]), cmap="gray")
 
-        for (x0, y0, x1, y1) in boxes * 256:
+        for x0, y0, x1, y1 in boxes * 256:
             xx = [x0, x1, x1, x0, x0]
             yy = [y0, y0, y1, y1, y0]
             plt.plot(xx, yy, "-")

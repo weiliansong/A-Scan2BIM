@@ -6,7 +6,6 @@ import time
 
 import cv2
 import matplotlib.pyplot as plt
-import networkx as nx
 import numpy as np
 import skimage
 import torch
@@ -15,8 +14,7 @@ from scipy.ndimage import gaussian_filter
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial import distance
 from shapely.geometry import LineString
-from shapely.ops import nearest_points
-from skimage.transform import SimilarityTransform, resize
+from skimage.transform import SimilarityTransform, resize, rotate
 from torch.utils.data import Dataset
 from torch.utils.data.dataloader import default_collate
 from torchvision import transforms
@@ -32,10 +30,33 @@ from utils.nn_utils import positional_encoding_2d
 EPS = 1e-6
 
 # for 512 dual big dataset
+density_mean = [0.18115416, 0.18115416, 0.18115416]
+density_std = [0.27998772, 0.27998772, 0.27998772]
 
 # combined
 # combined_mean = [0.06896243, 0.06896243, 0.06896243]
 # combined_std = [0.16101032, 0.16101032, 0.16101032]
+
+all_combinations = dict()
+for length in range(2, 400):
+    ids = np.arange(length)
+    combs = np.array(list(itertools.combinations(ids, 2)))
+    all_combinations[length] = combs
+
+markers = ["v", "^", "<", ">"]
+colors = [
+    "lime",
+    "red",
+    "turquoise",
+    "hotpink",
+    "cyan",
+    "orange",
+    "darkcyan",
+    "yellow",
+    "steelblue",
+    "lightcoral",
+    "skyblue",
+]
 
 
 class BuildingCornerDataset(Dataset):
@@ -49,8 +70,6 @@ class BuildingCornerDataset(Dataset):
         multiplier=1,
         threshold=8,
         vis_labels=False,
-        task="",
-        revectorize=False,
     ):
         super(BuildingCornerDataset, self).__init__()
         self.data_path = data_path
@@ -59,17 +78,10 @@ class BuildingCornerDataset(Dataset):
         self.batch_size = batch_size
         self.multiplier = multiplier
         self.threshold = threshold
-        self.task = task
-
-        assert test_idx > -1
-        assert task in ["metric_fix", "edge_class"]
-
-        if task == "metric_fix":
-            assert batch_size > 1
 
         print("GT matching threshold: %d" % threshold)
-        print("Task: %s" % task)
-        print("Revectorize: %s" % revectorize)
+
+        assert test_idx > -1
 
         floor_f = os.path.join(data_path, "all_floors.txt")
         with open(floor_f, "r") as f:
@@ -119,24 +131,16 @@ class BuildingCornerDataset(Dataset):
         self.neg_edges = {}
         self.pos_widths = {}
 
-        # for metric learning specifically
-        self.neighbors = {}
-
         for floor_name in floors:
             floor_name = floor_name[0]
             print(floor_name)
 
             # load full density image
-            tokens = floor_name.split("_")
-            first = "_".join(tokens[:-1])
-            second = tokens[-1]
-
-            # load full density image
             density_slices = []
             for slice_i in range(7):
-                slice_f = "../../../revit_projects/%s/%s/density_%02d.npy" % (
-                    first,
-                    second,
+                slice_f = "%s/density/%s/density_%02d.npy" % (
+                    data_path,
+                    floor_name,
                     slice_i,
                 )
                 density_slice = np.load(slice_f)
@@ -157,6 +161,7 @@ class BuildingCornerDataset(Dataset):
             pad_h_after = side_len - h - pad_h_before
             pad_w_before = (side_len - w) // 2
             pad_w_after = side_len - w - pad_w_before
+            self.padding = [pad_w_before, pad_h_before, pad_w_after, pad_h_after]
 
             density_full = np.pad(
                 density_full,
@@ -165,22 +170,44 @@ class BuildingCornerDataset(Dataset):
             self.density_fulls[floor_name] = density_full
 
             # load GT annotation
-            annot_f = os.path.join(
-                data_path, "annot/%s_one_shot_full.json" % floor_name
-            )
+            annot_f = os.path.join(data_path, "annot/%s.json" % floor_name)
             with open(annot_f, "r") as f:
                 annot = json.load(f)
 
             annot = np.array(list(annot.values()))
             gt_coords, gt_widths = annot[:, :4], annot[:, 4]
+
             gt_coords += [pad_w_before, pad_h_before, pad_w_before, pad_h_before]
             gt_widths = np.floor(gt_widths * 12).astype(int)
 
-            if revectorize:
-                gt_coords, gt_widths = my_utils.revectorize(gt_coords, gt_widths)
-
+            gt_coords, gt_widths = my_utils.revectorize(gt_coords, gt_widths)
             self.gt_coords[floor_name] = gt_coords
             self.gt_widths[floor_name] = gt_widths
+
+            # temporarily visualize old and revectorized edges
+            if False:
+                image = density_full.max(axis=2)
+
+                fig, [ax1, ax2] = plt.subplots(ncols=2, sharex=True, sharey=True)
+
+                ax1.imshow(0.5 * image, cmap="gray", vmin=0, vmax=1)
+                ax2.imshow(0.5 * image, cmap="gray", vmin=0, vmax=1)
+
+                for x0, y0, x1, y1 in gt_coords:
+                    color = np.random.choice(colors)
+                    marker = np.random.choice(markers)
+                    ax1.plot([x0, x1], [y0, y1], "-" + marker, color=color)
+
+                for x0, y0, x1, y1 in new_gt_coords:
+                    color = np.random.choice(colors)
+                    marker = np.random.choice(markers)
+                    ax2.plot([x0, x1], [y0, y1], "-" + marker, color=color)
+
+                ax1.set_axis_off()
+                ax2.set_axis_off()
+
+                plt.tight_layout()
+                plt.show()
 
             # load predicted corners
             corner_f = os.path.join(data_path, "pred_corners/%s.json" % floor_name)
@@ -191,7 +218,7 @@ class BuildingCornerDataset(Dataset):
             self.pred_corners[floor_name] = pred_corners
 
             # augment GT corners with predicted ones
-            gt_corners, gt_edge_ids = my_utils.corners_and_edges(gt_coords)
+            gt_corners, gt_edge_ids = self.corners_and_edges(gt_coords)
             self.gt_corners[floor_name] = gt_corners
             aug_corners = gt_corners.copy()
 
@@ -205,7 +232,7 @@ class BuildingCornerDataset(Dataset):
             self.aug_corners[floor_name] = aug_corners
 
             # generate true and false edges
-            all_edges = my_utils.all_combinations[len(aug_corners)]
+            all_edges = all_combinations[len(aug_corners)]
 
             if False:
                 gt_data = {"corners": gt_corners, "edges": gt_edge_ids}
@@ -223,12 +250,17 @@ class BuildingCornerDataset(Dataset):
                     pred_coords=aug_coords, gt_coords=gt_coords, threshold=threshold
                 )
 
+                # pos_edges = all_edges[labels == 1]
+                # neg_edges = all_edges[labels == 0]
+                # self.pos_edges[floor_name] = pos_edges
+                # self.neg_edges[floor_name] = neg_edges
+
                 neg_edges = all_edges[labels == 0]
 
                 pos_edges = []
                 pos_widths = []
 
-                for (pred_i, gt_i) in matches:
+                for pred_i, gt_i in matches:
                     pos_edges.append(all_edges[pred_i])
                     pos_widths.append(gt_widths[gt_i])
 
@@ -258,7 +290,7 @@ class BuildingCornerDataset(Dataset):
                     "edge_labels": np.ones(len(pos_edges)),
                     "edge_widths": pos_widths,
                 }
-                self.vis_example_class(example)
+                self.vis_example(example)
 
             # metric = Metric()
 
@@ -283,118 +315,10 @@ class BuildingCornerDataset(Dataset):
                 plt.savefig("test.png")
                 plt.close()
 
-            # for metric learning of fixing
-            if task == "metric_fix":
-                neighbors, _ = my_utils.get_nearby(
-                    edges_from=gt_coords, edges_to=gt_coords, threshold=15
-                )
-                self.neighbors[floor_name] = neighbors
-
     def __len__(self):
         return len(self.density_fulls) * self.multiplier
 
     def __getitem__(self, idx):
-        if self.task == "metric_fix":
-            return self.__getitem_metric_fix__(idx)
-        elif self.task == "edge_class":
-            return self.__getitem_edge_class__(idx)
-        else:
-            raise Exception("Unknown task %s" % self.task)
-
-    def __getitem_metric_fix__(self, idx):
-        floor_names = list(self.density_fulls.keys())
-        floor_name = np.random.choice(floor_names)
-
-        image = self.density_fulls[floor_name]
-
-        gt_coords = self.gt_coords[floor_name]
-        neighbors = self.neighbors[floor_name]
-
-        while True:
-            tgt_i = np.random.choice(range(len(gt_coords)))
-            if neighbors[tgt_i].sum() > 0:
-                break
-
-        # pick a random neighbor to use as reference
-        ref_i = np.random.choice(neighbors[tgt_i].nonzero()[0])
-
-        # find the intersection point, to shrink our target line to
-        ax, ay, bx, by = gt_coords[tgt_i]
-        cx, cy, dx, dy = gt_coords[ref_i]
-
-        tgt_shp = LineString([(ax, ay), (bx, by)])
-        ref_shp = LineString([(cx, cy), (dx, dy)])
-        (pt_on_tgt, _) = nearest_points(tgt_shp, ref_shp)
-
-        # shrink the line to the reference point by a percentage
-        # shrink_percent = np.random.random(size=self.batch_size)
-        shrink_percent = np.linspace(0, 1, num=self.batch_size, endpoint=True)
-
-        [(sx, sy)] = list(pt_on_tgt.coords)
-
-        ax_shrunk = ax + (sx - ax) * shrink_percent
-        ay_shrunk = ay + (sy - ay) * shrink_percent
-        bx_shrunk = bx + (sx - bx) * shrink_percent
-        by_shrunk = by + (sy - by) * shrink_percent
-
-        shrunk_coords = np.stack([ax_shrunk, ay_shrunk, bx_shrunk, by_shrunk], axis=1)
-
-        # in terms of conditional edges, we only include ones up to two degrees away
-        cond_edge_inds = set()
-
-        for nbr_1_i in neighbors[tgt_i].nonzero()[0]:
-            cond_edge_inds.add(nbr_1_i)
-            for nbr_2_i in neighbors[nbr_1_i].nonzero()[0]:
-                cond_edge_inds.add(nbr_2_i)
-
-        cond_edge_inds.remove(tgt_i)
-        cond_coords = gt_coords[list(cond_edge_inds)]
-
-        if len(cond_coords) + len(shrunk_coords) > 100:
-            num_cond = 100 - len(shrunk_coords)
-            cond_coords = cond_coords[-num_cond:]
-
-        # TODO randomly drop some edges as well
-
-        if False:
-            for _shrunk_coords in shrunk_coords:
-                color_coords = [
-                    ["--c", cond_coords],
-                    ["-oy", [gt_coords[tgt_i]]],
-                    ["-oc", [gt_coords[ref_i]]],
-                    ["-og", [_shrunk_coords]],
-                    ["*r", [(sx, sy)]],
-                ]
-                my_utils.vis_edges(image, color_coords)
-
-        # pack edges and provide the ordering labels from big to small
-        # NOTE label of 0 means ignore here, also works for padding later on
-        edge_coords = np.concatenate([cond_coords, shrunk_coords], axis=0)
-
-        edge_labels = np.zeros(len(edge_coords), dtype=int)
-        edge_labels[len(cond_coords) :] = np.arange(len(shrunk_coords), 0, -1)
-
-        # preprocess
-        corners, edges = my_utils.corners_and_edges(edge_coords)
-
-        image, corners, scale = my_utils.normalize_floor(image, corners)
-        if self.rand_aug:
-            image, corners = self.aug_example(image, corners)
-
-        image = my_utils.process_image(image)
-
-        # prepare example dictionary
-        edge_coords = corners[edges].reshape(-1, 4)
-
-        example = {
-            "floor_name": floor_name,
-            "img": image,
-            "edge_coords": edge_coords,
-            "edge_labels": edge_labels,
-        }
-        return example
-
-    def __getitem_edge_class__(self, idx):
         floor_names = list(self.density_fulls.keys())
         floor_name = np.random.choice(floor_names)
 
@@ -434,12 +358,12 @@ class BuildingCornerDataset(Dataset):
         image = self.density_fulls[floor_name].copy()
         corners = self.aug_corners[floor_name].copy()
 
-        image, corners, scale = my_utils.normalize_floor(image, corners)
+        image, corners = self.normalize_floor(image, corners)
         if self.rand_aug:
             image, corners = self.aug_example(image, corners)
 
         # preprocess image
-        image = my_utils.process_image(image)
+        image = self.process_image(image)
 
         # prepare example dictionary
         edge_coords = corners[edges].reshape(-1, 4)
@@ -452,9 +376,46 @@ class BuildingCornerDataset(Dataset):
             "width_labels": width_labels,
             "processed_corners_lengths": len(corners),
         }
-        # self.vis_example_class(example)
+        # self.vis_example(example)
 
         return example
+
+    def normalize_floor(self, image, corners, max_side_len=1000):
+        minx = corners[:, 0].min()
+        miny = corners[:, 1].min()
+        maxx = corners[:, 0].max()
+        maxy = corners[:, 1].max()
+
+        # normalize so longest edge is 1000, and to not change aspect ratio
+        w = maxx - minx
+        h = maxy - miny
+
+        if max(w, h) > max_side_len:
+            if w > h:
+                scale = max_side_len / w
+            else:
+                scale = max_side_len / h
+        else:
+            scale = 1
+
+        tform = SimilarityTransform(scale=scale)
+        new_corners = tform(corners)
+
+        # also scale the image the same way
+        (h, w, _) = image.shape
+        new_h = round(h * scale)
+        new_w = round(w * scale)
+        new_image = resize(image, (new_h, new_w))
+
+        return new_image, new_corners
+
+    def process_image(self, image):
+        image = image.transpose((2, 0, 1))
+        image -= np.array(density_mean)[:, np.newaxis, np.newaxis]
+        image /= np.array(density_std)[:, np.newaxis, np.newaxis]
+        image = image.astype(np.float32)
+
+        return image
 
     # random rotate and scaling
     def aug_example(self, image, corners):
@@ -492,6 +453,18 @@ class BuildingCornerDataset(Dataset):
 
         return image, new_corners
 
+    def vis_edges(self, coords, image):
+        image -= image.min()
+        image /= image.max()
+        plt.imshow(image[:, :, 1], cmap="gray")
+
+        for x0, y0, x1, y1 in coords:
+            plt.plot([x0, x1], [y0, y1], "-o")
+
+        plt.axis("off")
+        plt.show()
+        plt.close()
+
     def vis_corner_results(self, gt_corners, pred_corners, scores, image):
         fig, [ax1, ax2] = plt.subplots(ncols=2, sharex=True, sharey=True)
         # size = fig.get_size_inches()
@@ -521,7 +494,7 @@ class BuildingCornerDataset(Dataset):
         plt.show()
         plt.close()
 
-    def vis_example_class(self, example):
+    def vis_example(self, example):
         fig, [ax1, ax2] = plt.subplots(ncols=2)
         size = fig.get_size_inches()
         fig.set_size_inches(size * 4)
@@ -593,6 +566,29 @@ class BuildingCornerDataset(Dataset):
 
         plt.show()
         plt.close()
+
+    def corners_and_edges(self, edge_coords):
+        corners = np.concatenate([edge_coords[:, :2], edge_coords[:, 2:]])
+        corners = np.unique(corners, axis=0)
+
+        edge_ids = set()
+        for ax, ay, bx, by in edge_coords:
+            assert (corners == np.array([ax, ay])).all(axis=1).sum() == 1
+            a_idx = (corners == np.array([ax, ay])).all(axis=1).argmax()
+
+            assert (corners == np.array([bx, by])).all(axis=1).sum() == 1
+            b_idx = (corners == np.array([bx, by])).all(axis=1).argmax()
+
+            # assert (a_idx, b_idx) not in edge_ids
+            # assert (b_idx, a_idx) not in edge_ids
+            if a_idx < b_idx:
+                edge_ids.add((a_idx, b_idx))
+            else:
+                edge_ids.add((b_idx, a_idx))
+
+        edge_ids = np.array(list(edge_ids))
+
+        return corners, edge_ids
 
 
 def collate_fn_corner(data):

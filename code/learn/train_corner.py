@@ -28,10 +28,10 @@ from models.unet import ResNetBackbone
 def get_args_parser():
     parser = argparse.ArgumentParser("Set transformer detector", add_help=False)
     parser.add_argument("--lr", default=2e-4, type=float)
-    parser.add_argument("--batch_size", default=8, type=int)
+    parser.add_argument("--batch_size", default=32, type=int)
     parser.add_argument("--weight_decay", default=1e-5, type=float)
-    parser.add_argument("--epochs", default=60, type=int)
-    parser.add_argument("--lr_drop", default=2, type=int)
+    parser.add_argument("--epochs", default=70, type=int)
+    parser.add_argument("--lr_drop", default=40, type=int)
     parser.add_argument(
         "--clip_max_norm", default=0.1, type=float, help="gradient clipping max norm"
     )
@@ -155,7 +155,7 @@ def get_args_parser():
 
     parser.add_argument(
         "--output_dir",
-        default="./ckpts_heat_256",
+        default="../../ckpts/corner",
         help="path where to save, empty for no saving",
     )
     parser.add_argument(
@@ -173,7 +173,7 @@ def get_args_parser():
     parser.add_argument("--num_workers", default=2, type=int)
 
     # my own
-    parser.add_argument("--test_idx", type=int, required=True)
+    parser.add_argument("--test_idx", type=int, default=0)
 
     return parser
 
@@ -429,7 +429,7 @@ def evaluate(
 
 
 def main(args):
-    DATAPATH = "./data/bim_dataset_big_v5"
+    DATAPATH = "../../data"
     DET_PATH = None
     image_size = 256
     train_dataset = BuildingCornerDataset(
@@ -527,12 +527,18 @@ def main(args):
         start_epoch = ckpt["epoch"] + 1
 
     else:
-        ckpt = torch.load("ckpts_floorplan_corner0.1_v2_th5/checkpoint.pth")
-        backbone.load_state_dict(ckpt["backbone"])
-        corner_model.load_state_dict(ckpt["corner_model"])
-        # edge_model.load_state_dict(ckpt['edge_model'])
+        ckpt_f = "../../data/ckpts_floorplan_corner0.1_v2_th5/checkpoint.pth"
 
-        print("Resume from the floorplan density pre-trained checkpoint")
+        if os.path.exists(ckpt_f):
+            ckpt = torch.load("")
+            backbone.load_state_dict(ckpt["backbone"])
+            corner_model.load_state_dict(ckpt["corner_model"])
+            # edge_model.load_state_dict(ckpt['edge_model'])
+
+            print("Resume from the floorplan density pre-trained checkpoint")
+
+        else:
+            print("Training from scratch")
 
     n_backbone_parameters = sum(p.numel() for p in backbone_params if p.requires_grad)
     n_corner_parameters = sum(p.numel() for p in corner_params if p.requires_grad)

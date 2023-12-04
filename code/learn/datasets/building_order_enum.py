@@ -143,7 +143,6 @@ class BuildingCornerDataset(Dataset):
         self.orders = {}
         self.ordered_edges = {}
         self.heat_edges = {}
-        self.comb_edges = {}
         self.examples = []
 
         for floor_name in floors:
@@ -151,16 +150,11 @@ class BuildingCornerDataset(Dataset):
             print(floor_name)
 
             # load full density image
-            tokens = floor_name.split("_")
-            first = "_".join(tokens[:-1])
-            second = tokens[-1]
-
-            # load full density image
             density_slices = []
             for slice_i in range(7):
-                slice_f = "../../../revit_projects/%s/%s/density_%02d.npy" % (
-                    first,
-                    second,
+                slice_f = "%s/density/%s/density_%02d.npy" % (
+                    data_path,
+                    floor_name,
                     slice_i,
                 )
                 density_slice = np.load(slice_f)
@@ -190,18 +184,20 @@ class BuildingCornerDataset(Dataset):
 
             # load GT annotation and pad them
             annot_f = os.path.join(
-                data_path, "annot/%s_one_shot_full.json" % floor_name
+                data_path, "annot/%s.json" % floor_name
             )
             with open(annot_f, "r") as f:
                 annot = json.load(f)
 
             gt_eids = list(annot.keys())
-            gt_edges = np.array(list(annot.values()))[:, :4]
+            annot = np.array(list(annot.values()))
+            gt_edges, gt_widths = annot[:, :4], annot[:, 4]
             gt_edges += [pad_w_before, pad_h_before, pad_w_before, pad_h_before]
 
             # load predicted HEAT edges and pad them
-            heat_f = os.path.join(data_path, "pred_full_paper/%s.npy" % floor_name)
+            heat_f = os.path.join(data_path, "pred_edges/%s.npy" % floor_name)
             heat_edges = np.load(heat_f)
+            heat_edges -= 128
             heat_edges += [pad_w_before, pad_h_before, pad_w_before, pad_h_before]
             self.heat_edges[floor_name] = heat_edges
 
@@ -218,7 +214,7 @@ class BuildingCornerDataset(Dataset):
                     if (eid in gt_eids) and (eid not in order):
                         order.append(eid)
 
-            # order edges
+            # now ready to generate examples
             eid2idx = dict(zip(gt_eids, range(len(gt_eids))))
 
             def order2idx(order_i):
@@ -228,19 +224,6 @@ class BuildingCornerDataset(Dataset):
             ordered_edges = gt_edges[edge_ordering]
             self.ordered_edges[floor_name] = ordered_edges
 
-            # combine edges
-            labels, heat2ordered = my_utils.compute_label(
-                heat_edges, ordered_edges, threshold=30
-            )
-
-            comb_edges = ordered_edges.copy()
-            for (heat_i, ordered_i) in heat2ordered:
-                comb_edges[ordered_i] = heat_edges[heat_i]
-
-            comb_edges = np.concatenate([comb_edges, heat_edges[labels == 0]])
-            self.comb_edges[floor_name] = comb_edges
-
-            # now ready to generate examples
             num_steps = len(ordered_edges)
             min_len = 2
             max_len = 10
@@ -388,12 +371,11 @@ class BuildingCornerDataset(Dataset):
     def gen_metric_example(self, example_tup, max_order=10):
         (floor_name, direction, start_idx, end_idx) = example_tup
 
-        comb_edges = self.comb_edges[floor_name].copy()
+        ordered_edges = self.ordered_edges[floor_name]
 
         assert direction in ["forward", "reverse"]
         if direction == "reverse":
-            num_edges = len(self.ordered_edges[floor_name])
-            comb_edges[:num_edges] = comb_edges[:num_edges][::-1]
+            ordered_edges = ordered_edges[::-1]
 
         # edge_order = np.zeros(len(ordered_edges))
         # order_inds = list(range(end_idx - start_idx - 1, 0, -1))
@@ -401,7 +383,7 @@ class BuildingCornerDataset(Dataset):
         # edge_order[start_idx : end_idx - 1] = order_inds
         # assert edge_order.max() <= max_order
 
-        edge_order = np.zeros(len(comb_edges))
+        edge_order = np.zeros(len(ordered_edges))
         order_inds = list(range(end_idx - start_idx - 1, 0, -1))
         edge_order[start_idx : end_idx - 1] = order_inds
         edge_order = np.minimum(edge_order, max_order)
@@ -414,7 +396,7 @@ class BuildingCornerDataset(Dataset):
 
         example = {
             "floor_name": floor_name,
-            "edge_coords": comb_edges,
+            "edge_coords": ordered_edges,
             "edge_order": edge_order,
             "edge_label": label,
         }

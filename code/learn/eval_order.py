@@ -14,6 +14,7 @@ from scipy.spatial import distance
 from scipy.stats import entropy
 from tqdm import tqdm
 
+from timer import Timer
 import my_utils
 from datasets.building_ae import normalize_edges
 from datasets.building_order_enum import BuildingCornerDataset, collate_fn_seq
@@ -21,14 +22,18 @@ from models.order_class_models import EdgeTransformer as ClassifierModel
 from models.order_metric_models import EdgeTransformer as MetricModel
 from models.tcn import TCN
 
+import typer
+
+app = typer.Typer()
+
 # set random seed?
 
-DATA_PATH = "./data/bim_dataset_big_v5/"
+DATA_PATH = "../../data"
 # METRIC_DIR = "./ckpts_vml/04_21_order_metric_noisy"
-METRIC_DIR = "./ckpts_edge/04_17_order_metric_working"
+METRIC_DIR = "../../ckpts/order_metric"
 # METRIC_DIR = "./ckpts_vml/02_23_metric_reduce_sum"
-CLASS_DIR = "./ckpts_edge/04_14_order_class"
-TCN_DIR = "./ckpts_ae"
+CLASS_DIR = "../../ckpts/order_class"
+TCN_DIR = "../../ckpts/ae"
 
 match_threshold = 30
 
@@ -54,8 +59,29 @@ def get_seq_heuristic(
         used_mask = edge_order > 0
         dists[used_mask] = float("inf")
 
+        # also don't pick overlapping edges
+        keep_mask = my_utils.find_candidates_fast(
+            curr_seq=new_seq,
+            heat_edges=all_edges,
+            heat_widths=np.zeros(len(all_edges)),
+            return_mask=True,
+        )
+        dists[~keep_mask] = float("inf")
+
         # pick the best next edge
-        best_idx = dists.argmin()
+        # best_idx = dists.argmin()
+        best_inds = (dists == dists.min()).nonzero()[0]
+        best_idx = np.random.choice(best_inds)
+        # if len(best_inds) == 1:
+        #     best_idx = best_inds[0]
+        # elif len(best_inds) > 1:
+        #     dists2 = []
+        #     for cand_i in best_inds:
+        #         dists2.append(my_utils.perpen_dist(all_edges[query_i], all_edges[cand_i]))
+        #     best_idx = np.argmin(dists2)
+        # else:
+        #     raise Exception('Should be at least one candidate?')
+
         new_seq = np.concatenate([new_seq, all_edges[best_idx][None, :]], axis=0)
         edge_order[edge_order > 0] += 1
         edge_order = np.minimum(edge_order, 10)
@@ -148,6 +174,15 @@ def get_seq_classifier(
     cand_edges = cand_edges.copy()
 
     while len(curr_seq) < target_len:
+        # don't choose edges that overlap
+        keep_mask = my_utils.find_candidates_fast(
+            curr_seq=curr_seq,
+            heat_edges=cand_edges,
+            heat_widths=np.zeros(len(cand_edges)),
+            return_mask=True,
+        )
+        cand_edges = cand_edges[keep_mask]
+
         # obtain probabilities for each possible sequence
         probs = get_next_edge_prob_fast(cond_edges, curr_seq, cand_edges, model)
 
@@ -189,27 +224,34 @@ def get_seq_metric(
     max_order=10,
     density_full=None,
 ):
-    assert len(curr_seq) < 10
+    assert len(curr_seq) <= 10
+    assert len(cond_edges) == 0
 
     dist_fn = lambda x, y: 1.0 - F.cosine_similarity(x, y)
-
-    all_edges = np.concatenate([cond_edges, curr_seq, cand_edges])
-    edge_coords, _ = my_utils.metric_normalize_edges(all_edges)
-
-    edge_order = np.zeros(len(all_edges))
-
-    start_idx = len(cond_edges)
-    end_idx = start_idx + len(curr_seq)
-
-    edge_order[:start_idx] = max_order
-    edge_order[start_idx:end_idx] = list(range(end_idx - start_idx, 0, -1))
-    edge_order = np.minimum(edge_order, max_order)
-
-    query_i = end_idx - 1
 
     new_seq = curr_seq.copy()
     seq_probs = []
     while len(new_seq) < target_len:
+        # remove overlapping edges
+        keep_mask = my_utils.find_candidates_fast(
+            curr_seq=new_seq,
+            heat_edges=cand_edges,
+            heat_widths=np.zeros(len(cand_edges)),
+            return_mask=True,
+        )
+        cand_edges = cand_edges[keep_mask]
+
+        # preprocess edges
+        all_edges = np.concatenate([new_seq, cand_edges])
+        edge_coords, _ = my_utils.metric_normalize_edges(all_edges)
+
+        # prepare order
+        end_idx = len(new_seq)
+        query_i = end_idx - 1
+        edge_order = np.zeros(len(all_edges))
+        edge_order[:end_idx] = list(range(end_idx, 0, -1))
+        edge_order = np.minimum(edge_order, max_order)
+
         example = {"edge_coords": edge_coords, "edge_order": edge_order}
         data = my_utils.metric_collate_fn([example])
 
@@ -750,11 +792,11 @@ def eval_floor(floor_idx, target_len, edge_type):
         # curr_seq = gt_edges[start_idx : start_idx + 1]
         # cand_edges = my_utils.find_candidates(curr_seq, src_edges)
 
-        # seq_heuristic = get_seq_heuristic(
-        #     curr_seq=curr_seq,
-        #     cand_edges=cand_edges,
-        #     target_len=target_len,
-        # )
+        seq_heuristic = get_seq_heuristic(
+            curr_seq=curr_seq,
+            cand_edges=cand_edges,
+            target_len=target_len,
+        )
 
         seq_class = get_seq_classifier(
             model=class_model,
@@ -763,7 +805,6 @@ def eval_floor(floor_idx, target_len, edge_type):
             cand_edges=cand_edges,
             target_len=target_len,
         )
-        seq_heuristic = seq_class
 
         seq_metric, _ = get_seq_metric(
             model=metric_model,
@@ -774,7 +815,9 @@ def eval_floor(floor_idx, target_len, edge_type):
             density_full=density_full,
         )
 
-        # my_utils.vis_edges(density_full, [["-o", seq_metric]])
+        # my_utils.vis_edges(density_full, [["-o", seq_heuristic]])
+        # my_utils.vis_edges(density_full, [["--o", seq_class]])
+        # my_utils.vis_edges(density_full, [["--o", seq_metric]])
 
         # used to compute FID scores
         # seq_heuristic = seq_heuristic[len(curr_seq) :]
@@ -826,6 +869,7 @@ def eval_floor(floor_idx, target_len, edge_type):
     print("FID class    : %.3f" % fid_class)
     print("FID metric   : %.3f" % fid_metric)
 
+    os.makedirs("fid_csv", exist_ok=True)
     with open("fid_csv/fid_%s_%02d.csv" % (edge_type, floor_idx), "a") as f:
         f.write(
             "%d,%d,%.3f,%.3f,%.3f,%.3f\n"
@@ -1250,10 +1294,12 @@ def eval_acc_wrt_history(floor_idx, cond_len, target_len):
         f.write("%d,%d,%d,%.3f\n" % (floor_idx, cond_len, target_len, all_acc))
 
 
+@app.command()
 def eval_all_floors():
-    for target_len in range(1, 11):
-        for floor_idx in range(16):
-            eval_floor(floor_idx, target_len)
+    for edge_type in ["GT", "HEAT"]:
+        for target_len in range(1, 11):
+            for floor_idx in range(16):
+                eval_floor(floor_idx, target_len, edge_type)
 
 
 def eval_floor_worker():
@@ -1272,7 +1318,9 @@ def eval_floor_worker():
         eval_floor(args.test_idx, target_len, args.edge_type)
 
 
+@app.command()
 def eval_all_acc_wrt_history():
+    print("Eval acc")
     for cond_len in range(1, 10 + 1):
         for floor_idx in range(16):
             eval_acc_wrt_history(floor_idx, cond_len, cond_len + 5)
@@ -1293,6 +1341,7 @@ def set_font_sizes():
     plt.rc("figure", titlesize=BIGGER_SIZE)  # fontsize of the figure title
 
 
+@app.command()
 def plot_seq_FID():
     # for FID scores on GT edges
     scores_gt_h = [[] for _ in range(9)]
@@ -1305,24 +1354,13 @@ def plot_seq_FID():
                 tokens = line.strip().split(",")
 
                 seq_len = int(tokens[1])
-                # score_h = float(tokens[3])
+                score_h = float(tokens[3])
                 score_c = float(tokens[4])
                 score_m = float(tokens[5])
 
-                # scores_gt_h[seq_len - 2].append(score_h)
+                scores_gt_h[seq_len - 2].append(score_h)
                 scores_gt_c[seq_len - 2].append(score_c)
                 scores_gt_m[seq_len - 2].append(score_m)
-
-    for floor_idx in range(16):
-        with open("fid_csv/good_GT/fid_GT_%02d.csv" % floor_idx, "r") as f:
-            f.readline()  # ignore the first 1-len one
-
-            for line in f:
-                tokens = line.strip().split(",")
-
-                seq_len = int(tokens[1])
-                score_h = float(tokens[3])
-                scores_gt_h[seq_len - 2].append(score_h)
 
     assert np.array(scores_gt_h).shape[1] == 16
     assert np.array(scores_gt_c).shape[1] == 16
@@ -1368,13 +1406,13 @@ def plot_seq_FID():
     # GREEN = "#00FF7F"
     # BLUE = "#00FFFF"
 
-    ax1.plot(range(2, 11), scores_gt_h, "-o", color=YELLOW)
-    ax1.plot(range(2, 11), scores_gt_c, "-o", color=BLUE)
-    ax1.plot(range(2, 11), scores_gt_m, "-o", color=GREEN)
+    ax1.plot(range(2, 9), scores_gt_h[:-2], "-o", color=YELLOW)
+    ax1.plot(range(2, 9), scores_gt_c[:-2], "-o", color=BLUE)
+    ax1.plot(range(2, 9), scores_gt_m[:-2], "-o", color=GREEN)
 
-    ax2.plot(range(2, 11), scores_heat_h, "-o", color=YELLOW)
-    ax2.plot(range(2, 11), scores_heat_c, "-o", color=BLUE)
-    ax2.plot(range(2, 11), scores_heat_m, "-o", color=GREEN)
+    ax2.plot(range(2, 9), scores_heat_h[:-2], "-o", color=YELLOW)
+    ax2.plot(range(2, 9), scores_heat_c[:-2], "-o", color=BLUE)
+    ax2.plot(range(2, 9), scores_heat_m[:-2], "-o", color=GREEN)
 
     ax1.set_title("Predicted sequences with GT walls")
     ax1.set_xlabel("Sequence length")
@@ -1397,7 +1435,7 @@ def plot_seq_FID():
 
 
 def plot_history_acc():
-    scores = [[] for _ in range(10)]
+    scores = [[] for _ in range(9)]
 
     with open("acc_history.csv", "r") as f:
         for line in f:
@@ -1426,6 +1464,7 @@ def plot_history_acc():
     plt.close()
 
 
+@app.command()
 def eval_entropy():
     target_len = 10
 
@@ -1582,6 +1621,7 @@ def make_qual_fig():
 
 if __name__ == "__main__":
     set_font_sizes()
+    app()
 
     # eval_all_floors()
     # eval_floor_worker()
@@ -1590,4 +1630,4 @@ if __name__ == "__main__":
     # plot_seq_FID()
     # plot_history_acc()
     # all_qual_eval()
-    make_qual_fig()
+    # make_qual_fig()
