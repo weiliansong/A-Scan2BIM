@@ -4,6 +4,15 @@ Official implementation of the paper [A-Scan2BIM: Assistive Scan to Building Inf
 
 Please also visit our [project website](https://a-scan2bim.github.io/) for a video demo of our assistive system.
 
+# Updates
+
+[12/08/2023]
+We are unable to release data for two floors, as the point clouds are unfortunately not available for download.
+
+[11/30/2023]
+Due to a bug in our heuristic baseline method, we have updated our order evaluations. Please see the updated arXiv paper for the latest results.
+
+
 # Table of contents (also TODOs)
 
 - [x] [Prerequisites](#prerequisites)
@@ -137,10 +146,35 @@ They are trained stand-alone, which we will describe the process step-by-step.
 
 First, fill out the data request form [here](https://forms.gle/Apg86MauTep2KTxx8).
 We will be in contact with you to provide the data download links.
+Once you have the data, unzip it in the root directory of the repository.
+
+Since we do not own the point clouds, please download them from the [workshop website](https://cv4aec.github.io/). You would need the data from the [3D challenge](https://codalab.lisn.upsaclay.fr/competitions/12405), both the train and test data. Rename and move all the LAZ files to the data folder like below:
+
+```
+data/
+├── history/
+├── transforms/
+├── all_floors.txt
+└── laz/
+    ├── 05_MedOffice_01_F2.laz
+    ├── 06_MedOffice_02_F1.laz
+    ├── 07_MedOffice_03_F3.laz
+    ├── 08_ShortOffice_01_F2.laz
+    ├── 11_MedOffice_05_F2.laz
+    ├── 11_MedOffice_05_F4.laz
+    ├── 19_MedOffice_07_F4.laz
+    ├── 25_Parking_01_F1.laz
+    ├── 32_ShortOffice_05_F1.laz
+    ├── 32_ShortOffice_05_F2.laz
+    ├── 32_ShortOffice_05_F3.laz
+    ├── 33_SmallBuilding_03_F1.laz
+    ├── 35_Lab_02_F1.laz
+    └── 35_Lab_02_F2.laz
+```
 
 To install all python dependencies, run the provided script: `sh ./setup_env.sh`.
 
-Once you have the data, unzip it in the root directory of the repository and run the following command to preprocess the data:
+Then run the following command to preprocess the data:
 ```
 cd code/preprocess
 python data_gen.py
