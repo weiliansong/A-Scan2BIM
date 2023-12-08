@@ -180,7 +180,7 @@ cd code/preprocess
 python data_gen.py
 ```
 
-Also please download pretrained models from [here](https://www.dropbox.com/scl/fi/kdz2uvar3di2jgzb64ca0/ckpts_full.zip?rlkey=npe06fic06uaxblygo27d5o6h&dl=0) and extract to the root directory of the repository.
+Also please download pretrained models from [here](https://www.dropbox.com/scl/fi/cwhgu92a6ndl212nls59i/ckpts_full.zip?rlkey=pabethcn0w0rxqk0k5x1da0dv&dl=0) and extract to the root directory of the repository.
 Some weights are necessary for network initialization (`pretrained/`) or evaluation (`ae/`), but others you may delete if training from scratch.
 
 ## Training candidate wall enumerator
