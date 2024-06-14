@@ -63,6 +63,9 @@ type_map = {
     "column_type": 7,
 }
 
+# point cloud slice heights
+slice_intervals = np.array([-1.0, 1.64, 3.28, 4.92, 6.56, 8.2, 9.84, 12.0])
+
 
 def set_font_sizes():
     # sets font sizes
@@ -610,11 +613,10 @@ def process_model(floor_root, pcd):
 
         # slice by every half a meter, sort of I think
         print("Slicing point cloud")
-        intervals = np.array([-1.0, 1.64, 3.28, 4.92, 6.56, 8.2, 9.84, 12.0])
 
         density_slices = []
         for slice_i, (slice_minz, slice_maxz) in enumerate(
-            tqdm(list(zip(intervals[:-1], intervals[1:])))
+            tqdm(list(zip(slice_intervals[:-1], slice_intervals[1:])))
         ):
             sliced_pcd = crop_pc_z(cropped_pcd, slice_minz, slice_maxz)
             density_slice = get_density(sliced_pcd, bounds, width=w, height=h)

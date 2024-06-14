@@ -11,25 +11,22 @@ import numpy as np
 import shapely
 import torch
 import torch.nn.functional as F
-from models.corner_models import CornerEnum
-from models.edge_full_models import EdgeEnum
-from models.order_metric_models import EdgeTransformer as MetricModel
-from models.unet import ResNetBackbone
+import typer
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial import distance
 from scipy.stats import entropy
 from shapely import affinity
-from shapely.geometry import (
-    LineString,
-    MultiLineString,
-    MultiPoint,
-)
+from shapely.geometry import LineString, MultiLineString, MultiPoint
 from tqdm import tqdm
+
+from timer import Timer
 
 import my_utils
 from datasets.building_corners_full import collate_fn_seq, get_pixel_features
-from timer import Timer
-import typer
+from models.corner_models import CornerEnum
+from models.edge_full_models import EdgeEnum
+from models.order_metric_models import EdgeTransformer as MetricModel
+from models.unet import ResNetBackbone
 
 app = typer.Typer()
 
@@ -89,7 +86,7 @@ class Backend:
         else:
             raise Exception
 
-    def init_corner_models(self, floor_idx):
+    def init_corner_models(self, ckpt_path='', floor_idx=-1):
         backbone = ResNetBackbone()
         strides = backbone.strides
         num_channels = backbone.num_channels
@@ -106,7 +103,9 @@ class Backend:
         corner_model = corner_model.cuda()
         corner_model.eval()
 
-        ckpt_path = "%s/%d/checkpoint.pth" % (self.corner_model_path, floor_idx)
+        if not ckpt_path:
+            assert floor_idx > -1
+            ckpt_path = "%s/%d/checkpoint.pth" % (self.corner_model_path, floor_idx)
         ckpt = torch.load(ckpt_path)
 
         backbone_ckpt = {}
@@ -126,7 +125,7 @@ class Backend:
 
         print("Loaded corner models")
 
-    def init_edge_models(self, floor_idx):
+    def init_edge_models(self, ckpt_path='', floor_idx=-1):
         start = time.time()
 
         backbone = ResNetBackbone()
@@ -148,7 +147,10 @@ class Backend:
         edge_model = edge_model.cuda()
         edge_model.eval()
 
-        ckpt_path = "%s/%d/checkpoint.pth" % (self.edge_model_path, floor_idx)
+        if not ckpt_path:
+            assert floor_idx > -1
+            ckpt_path = "%s/%d/checkpoint.pth" % (self.edge_model_path, floor_idx)
+
         ckpt = torch.load(ckpt_path)
         print("Edge ckpt path: %d from %s" % (ckpt["epoch"], ckpt_path))
         backbone.load_state_dict(ckpt["backbone"])
@@ -161,14 +163,17 @@ class Backend:
 
         print("Loaded edge models (%.3f seconds)" % (end - start))
 
-    def init_metric_model(self, floor_idx):
+    def init_metric_model(self, ckpt_path='', floor_idx=-1):
         start = time.time()
 
         metric_model = MetricModel(d_model=256)
         metric_model = metric_model.cuda()
         metric_model.eval()
 
-        ckpt_path = "%s/%d/checkpoint_latest.pth" % (self.metric_model_path, floor_idx)
+        if not ckpt_path:
+            assert floor_idx > -1
+            ckpt_path = "%s/%d/checkpoint_latest.pth" % (self.metric_model_path, floor_idx)
+
         ckpt = torch.load(ckpt_path)
         metric_model.load_state_dict(ckpt["edge_model"])
 
@@ -186,6 +191,7 @@ class Backend:
             floor_names = [x.strip() for x in f.readlines()]
         self.floor_name = floor_names[floor_idx].split(",")[0]
 
+        print('Loading %s' % self.floor_name)
         with open("%s/bounds/%s.csv" % (self.data_path, self.floor_name), "r") as f:
             self.bounds = [float(x) for x in f.readline().strip().split(",")]
 
@@ -283,6 +289,35 @@ class Backend:
 
         end = time.time()
         print("Loaded floor data (%.3f seconds)" % (end - start))
+
+    def init_floor_user(self, floor_name, density_slices, bounds):
+        self.floor_name = floor_name
+
+        # bounds are used to convert between local and Revit coordinates
+        self.bounds = bounds
+
+        density_full = [
+            my_utils.normalize_density(np.sum(density_slices[:4], axis=0)),
+            my_utils.normalize_density(density_slices[4]),
+            my_utils.normalize_density(np.sum(density_slices[5:7], axis=0)),
+        ]
+        density_full = np.stack(density_full, axis=2)
+
+        # we need to square pad the image
+        (h, w, _) = density_full.shape
+        side_len = max(h, w)
+
+        pad_h_before = (side_len - h) // 2
+        pad_h_after = side_len - h - pad_h_before
+        pad_w_before = (side_len - w) // 2
+        pad_w_after = side_len - w - pad_w_before
+        self.square_pad = [pad_w_before, pad_h_before, pad_w_after, pad_h_after]
+
+        density_full = np.pad(
+            density_full,
+            [[pad_h_before, pad_h_after], [pad_w_before, pad_w_after], [0, 0]],
+        )
+        self.density_full = density_full
 
     def cache_image_feats(self, corners):
         image = self.density_full.copy()
@@ -2245,6 +2280,34 @@ def demo_floor():
     backend.init_corner_models(floor_idx)
     backend.init_edge_models(floor_idx)
     backend.init_metric_model(floor_idx)
+    backend.cache_image_feats(backend.cached_corners)
+
+    backend.start_server()
+
+
+@app.command()
+def demo_user(
+    floor_name: str = "",
+    laz_f: str = "",
+    laz_transform_f: str = "",
+    corner_ckpt_f: str = "",
+    edge_ckpt_f: str = "",
+    metric_ckpt_f: str = "",
+):
+    density_slices, bounds = my_utils.process_laz(laz_f, laz_transform_f)
+
+    backend = Backend()
+    backend.init_floor_user(floor_name, density_slices, bounds)
+    backend.init_corner_models(ckpt_path=corner_ckpt_f)
+    backend.init_edge_models(ckpt_path=edge_ckpt_f)
+    backend.init_metric_model(ckpt_path=metric_ckpt_f)
+
+    if os.path.exists('corners.npy'):
+        backend.cached_corners = np.load('corners.npy')
+    else:
+        backend.cached_corners = backend.get_pred_corners()
+        np.save('corners.npy', backend.cached_corners)
+
     backend.cache_image_feats(backend.cached_corners)
 
     backend.start_server()

@@ -1,16 +1,26 @@
 import itertools
+import os
 
+import laspy
 import matplotlib.pyplot as plt
 import numpy as np
+import open3d as o3d
 import scipy.ndimage.filters as filters
 import torch
+from tqdm import tqdm
 from rtree import index
 from scipy.spatial import distance
 from shapely import affinity
-from shapely.geometry import LineString, MultiLineString, MultiPoint, Point, box
+from shapely.geometry import (LineString, MultiLineString, MultiPoint, Point,
+                              box)
 from shapely.ops import nearest_points, split
 from skimage.transform import SimilarityTransform, resize
 from torch.utils.data.dataloader import default_collate
+
+# we need point cloud processing functions
+import sys
+sys.path.append('../preprocess')
+from data_gen import crop_pc, crop_pc_z, get_density, slice_intervals
 
 all_combinations = dict()
 for length in range(2, 500):
@@ -1328,3 +1338,87 @@ def vis_ref(image, edge_coords, ref_dict, s2_ids):
         plt.tight_layout()
         plt.show()
         plt.close()
+
+
+# the unit for points in LAZ file should be feet, and when we project onto the
+# 2D plane, we project at 1-inch resolution, hence the multiply by 12
+def process_laz(laz_f, transform_f, ignore_cached=False):
+    # use the cached data if we have it
+    if (not ignore_cached) and os.path.exists('density.npy') and os.path.exists('bounds.npy'):
+        print('Loading cached density slices')
+        bounds = np.load('bounds.npy')
+        density_slices = np.load('density.npy')
+        return density_slices, bounds
+
+    print('Processing point cloud data')
+
+    # load whole point cloud as o3d object
+    with laspy.open(laz_f) as fh:
+        las = fh.read()
+        scale_x, scale_y, scale_z = las.header.scale
+        offset_x, offset_y, offset_z = las.header.offset
+
+        X = las.X * scale_x + offset_x
+        Y = las.Y * scale_y + offset_y
+        Z = las.Z * scale_z + offset_z
+
+        points = np.stack([X, Y, Z], axis=-1).astype(np.float32)
+        # points /= .3048  # meters to feet
+
+        R, G, B = las.red, las.green, las.blue
+        colors = np.stack([R, G, B], axis=-1).astype(np.float64)
+        colors = colors / 65280.0
+
+    # obtain transformation matrix (exported from Revit)
+    with open(transform_f, "r") as f:
+        b0 = [float(x) for x in f.readline().strip().split(",")[1:]]
+        b1 = [float(x) for x in f.readline().strip().split(",")[1:]]
+        b2 = [float(x) for x in f.readline().strip().split(",")[1:]]
+        origin = [float(x) for x in f.readline().strip().split(",")[1:]]
+        scale = float(f.readline().strip().split(",")[1])
+        bounds_min = np.array([float(x) for x in f.readline().strip().split(",")[1:]])
+        bounds_max = np.array([float(x) for x in f.readline().strip().split(",")[1:]])
+
+        t = np.array([b0, b1, b2, origin]) / scale
+        bounds_min = bounds_min / scale
+        bounds_max = bounds_max / scale
+
+    # do the transform
+    points = np.concatenate([points, np.ones([len(points), 1])], axis=1)
+    points = points @ t
+
+    # also meters to feet
+    points /= 0.3048
+    bounds_min /= 0.3048
+    bounds_max /= 0.3048
+
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points)
+    pcd.colors = o3d.utility.Vector3dVector(colors)
+
+    # determine point cloud bounds
+    bounds_minx, bounds_miny, _ = bounds_min * 12 - 15
+    bounds_maxx, bounds_maxy, _ = bounds_max * 12 + 15
+
+    h = round(bounds_maxy - bounds_miny)
+    w = round(bounds_maxx - bounds_minx)
+
+    print('Cropping point cloud according to bound')
+    bounds = np.array([bounds_minx, bounds_miny, bounds_maxx, bounds_maxy])
+    bounds_ft = bounds / 12
+    cropped_pcd = crop_pc(pcd, bounds_ft)
+
+    print('Slicing and projecting point cloud onto 2D')
+    density_slices = []
+    for slice_i, (slice_minz, slice_maxz) in enumerate(
+        tqdm(list(zip(slice_intervals[:-1], slice_intervals[1:])))
+    ):
+        sliced_pcd = crop_pc_z(cropped_pcd, slice_minz, slice_maxz)
+        density_slice = get_density(sliced_pcd, bounds_ft, width=w, height=h)
+        density_slices.append(density_slice)
+
+    print('Caching preprocessed data')
+    np.save('density.npy', np.array(density_slices))
+    np.save('bounds.npy', bounds)
+
+    return density_slices, bounds

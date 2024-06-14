@@ -37,12 +37,6 @@ density_std = [0.27998772, 0.27998772, 0.27998772]
 # combined_mean = [0.06896243, 0.06896243, 0.06896243]
 # combined_std = [0.16101032, 0.16101032, 0.16101032]
 
-all_combinations = dict()
-for length in range(2, 400):
-    ids = np.arange(length)
-    combs = np.array(list(itertools.combinations(ids, 2)))
-    all_combinations[length] = combs
-
 markers = ["v", "^", "<", ">"]
 colors = [
     "lime",
@@ -78,6 +72,12 @@ class BuildingCornerDataset(Dataset):
         self.batch_size = batch_size
         self.multiplier = multiplier
         self.threshold = threshold
+
+        all_combinations = dict()
+        for length in range(2, 400):
+            ids = np.arange(length)
+            combs = np.array(list(itertools.combinations(ids, 2)))
+            all_combinations[length] = combs
 
         print("GT matching threshold: %d" % threshold)
 
