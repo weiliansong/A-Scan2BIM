@@ -6,6 +6,9 @@ Please also visit our [project website](https://a-scan2bim.github.io/) for a vid
 
 # Updates
 
+[06/14/2024]
+Updated our assistive demo so it accepts user-provided point cloud. Please visit [here](QUICKSTART.md) for instructions.
+
 [12/08/2023]
 We are unable to release data for two floors, as the point clouds are unfortunately not available for download.
 
