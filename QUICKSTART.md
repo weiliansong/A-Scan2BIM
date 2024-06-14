@@ -70,11 +70,22 @@ Import the point cloud from the top ribbon menu: `Insert -> Point Clouds`.
 
 Transform the point cloud inside Revit such that the ground plane is at Level 1 and that majority of the walls are axis-aligned. Please see the below GIFs for how to do the transforms.
 
-Translate ground plane to level 1:
+<details>
+<summary>Translate ground plane to level 1</summary>
+
 ![Translate ground plane](resources/translate.gif)
 
-Rotate walls so they are axis-aligned:
+</details>
+
+<details>
+
+<summary>Rotate walls so they are axis-aligned</summary>
+
 ![Axis-aligned rotation](resources/rotate.gif)
+
+</details>
+
+<br/>
 
 Use section box to define the rough bounding box of point cloud. Section box parameters
 are used by backend server for processing later on.
